@@ -1,0 +1,181 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import pyodbc
+from decimal import Decimal, ROUND_HALF_UP
+import pandas as pd
+
+conn_str = 'Driver={SQL Server};Server=HOMENET132\SQLEXPRESS;Database=Wonka22;Trusted_Connection=yes;'
+
+def execute_query(procedure_name, save_to_excel=False):
+    global conn_str, tree
+    
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        cursor.execute(f"{{CALL {procedure_name}}}")
+        columns = [desc[0] for desc in cursor.description]
+        results = cursor.fetchall()
+        
+        tree.delete(*tree.get_children())
+        
+        tree["columns"] = columns
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, anchor=tk.W)
+        
+        formatted_results = []
+        for row in results:
+            formatted_row = [float(value.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)) if isinstance(value, Decimal) else value for value in row]
+            tree.insert("", tk.END, values=formatted_row)
+            formatted_results.append(formatted_row)
+        
+        conn.close()
+        
+        if save_to_excel:
+            save_results_to_excel(columns, formatted_results)
+            
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка выполнения запроса: {str(e)}")
+
+def save_results_to_excel(columns, results):
+    df = pd.DataFrame(results, columns=columns)
+    file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+    if file_path:
+        df.to_excel(file_path, index=False)
+        messagebox.showinfo("Успех", f"Результаты сохранены в {file_path}")
+
+def create_main_window():
+    global root, tree
+
+    root = tk.Tk()
+    root.title("База данных Савва Курин")
+    root.geometry("800x600")
+
+    btn1 = tk.Button(root, text="Средняя стоимость продукции", command=lambda: execute_query("GetAverageProductCost"))
+    btn1.pack(pady=20)
+    btn2 = tk.Button(root, text="Поставки сотрудников", command=lambda: execute_query("GetEmployeeShipments"))
+    btn2.pack(pady=10)
+    btn3 = tk.Button(root, text="Количество сотрудников на заводе", command=lambda: execute_query("GetFactoryEmployeeCount"))
+    btn3.pack(pady=10)
+    btn4 = tk.Button(root, text="Количество заказов по клиентам", command=lambda: execute_query("GetCustomerOrdersCount"))
+    btn4.pack(pady=10)
+    btn5 = tk.Button(root, text="Заказы по клиентам", command=lambda: execute_query("GetCustomerProductShipments"))
+    btn5.pack(pady=20)
+    
+    export_button = tk.Button(root, text="Экспортировать в Excel", command=lambda: execute_query("GetCustomerProductShipments", save_to_excel=True))
+    export_button.pack(pady=10)
+    
+    logout_button = tk.Button(root, text="Выход из аккаунта", command=logout)
+    logout_button.pack(pady=20)
+
+    tree = ttk.Treeview(root, show='headings')
+    tree.pack(pady=5, fill=tk.BOTH, expand=True)
+
+    root.mainloop()
+
+def logout():
+    global root
+    root.destroy()
+    open_login_window()
+
+def check_credentials():
+    global username_entry, password_entry, login_window
+
+    username = username_entry.get()
+    password = password_entry.get()
+
+    if len(username) <= 8 or len(password) <= 8:
+        messagebox.showerror("Ошибка", "Логин и пароль должны быть более 8 символов.")
+        return
+
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT username FROM Users WHERE username=? AND password=?", (username, password))
+        row = cursor.fetchone()
+
+        if row:
+            messagebox.showinfo("Успешно", "Вход выполнен успешно.")
+            login_window.destroy()
+            create_main_window()
+        else:
+            messagebox.showerror("Ошибка", "Неправильный логин или пароль.")
+
+        conn.close()
+
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка при подключении к базе данных: {str(e)}")
+
+def open_register_window():
+    global register_window, new_username_entry, new_password_entry
+    register_window = tk.Toplevel(login_window)
+    register_window.title("Регистрация нового пользователя")
+    register_window.geometry("400x228")
+    register_window.resizable(False, False)
+
+    tk.Label(register_window, text="Логин:").pack(pady=5)
+    new_username_entry = tk.Entry(register_window)
+    new_username_entry.pack(pady=5)
+
+    tk.Label(register_window, text="Пароль:").pack(pady=5)
+    new_password_entry = tk.Entry(register_window, show="*")
+    new_password_entry.pack(pady=5)
+
+    tk.Button(register_window, text="Зарегистрироваться", command=register_user).pack(pady=10)
+
+def register_user():
+    global new_username_entry, new_password_entry, register_window
+
+    new_username = new_username_entry.get()
+    new_password = new_password_entry.get()
+
+    if len(new_username) <= 8 or len(new_password) <= 8:
+        messagebox.showerror("Ошибка", "Логин и пароль должны быть не менее 8 символов.")
+        return
+
+    if new_username == "" or new_password == "":
+        messagebox.showerror("Ошибка", "Необходимо ввести логин и пароль.")
+        return
+
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT username FROM Users WHERE username=?", (new_username,))
+        if cursor.fetchone():
+            messagebox.showerror("Ошибка", "Пользователь с таким логином уже существует.")
+            return
+        
+        cursor.execute("INSERT INTO Users (username, password) VALUES (?, ?)", (new_username, new_password))
+        conn.commit()
+        conn.close()
+
+        messagebox.showinfo("Успех", "Регистрация прошла успешно.")
+        register_window.destroy()
+
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка при подключении к базе данных: {str(e)}")
+
+def open_login_window():
+    global login_window, username_entry, password_entry
+
+    login_window = tk.Tk()
+    login_window.title("Авторизация")
+    login_window.geometry("600x300")
+    login_window.resizable(False, False)
+
+    tk.Label(login_window, text="Логин:").pack(pady=5)
+    username_entry = tk.Entry(login_window)
+    username_entry.pack(pady=5)
+
+    tk.Label(login_window, text="Пароль:").pack(pady=5)
+    password_entry = tk.Entry(login_window, show="*")
+    password_entry.pack(pady=5)
+
+    tk.Button(login_window, text="Войти", command=check_credentials).pack(pady=10)
+    tk.Button(login_window, text="Регистрация", command=open_register_window).pack(pady=10)
+
+    login_window.mainloop()
+
+open_login_window()
