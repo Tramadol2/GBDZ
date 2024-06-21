@@ -1,0 +1,279 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import pyodbc
+from decimal import Decimal, ROUND_HALF_UP
+import pandas as pd
+import datetime
+
+conn_str = 'Driver={SQL Server};Server=HOMENET132\SQLEXPRESS;Database=Wonka22;Trusted_Connection=yes;'
+
+current_columns = []
+current_results = []
+
+def execute_query(procedure_name):
+    global conn_str, tree, current_columns, current_results
+    
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        cursor.execute(f"{{CALL {procedure_name}}}")
+        columns = [desc[0] for desc in cursor.description]
+        results = cursor.fetchall()
+        
+        tree.delete(*tree.get_children())
+        
+        tree["columns"] = columns
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, anchor=tk.W)
+        
+        formatted_results = []
+        for row in results:
+            formatted_row = [float(value.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)) if isinstance(value, Decimal) else value for value in row]
+            tree.insert("", tk.END, values=formatted_row)
+            formatted_results.append(formatted_row)
+        
+        current_columns = columns
+        current_results = formatted_results
+        
+        conn.close()
+            
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка выполнения запроса: {str(e)}")
+
+def save_results_to_excel():
+    global current_columns, current_results
+    if current_columns and current_results:
+        df = pd.DataFrame(current_results, columns=current_columns)
+        now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], initialfile=f"Results_{now}")
+        if file_path:
+            df.to_excel(file_path, index=False)
+            messagebox.showinfo("Успех", f"Результаты сохранены в {file_path}")
+    else:
+        messagebox.showerror("Ошибка", "Нет данных для сохранения. Выполните запрос.")
+
+def automate_excel():
+    global current_columns, current_results
+    if current_columns and current_results:
+        numeric_columns = [col for col in current_columns if all(isinstance(row[current_columns.index(col)], (int, float, Decimal)) for row in current_results)]
+        if not numeric_columns:
+            messagebox.showerror("Ошибка", "Нет доступных числовых столбцов для автоматизации.")
+            return
+        
+        automate_window = tk.Toplevel(root)
+        automate_window.title("Выбор столбца для автоматизации")
+        tk.Label(automate_window, text="Выберите колонку для поиска максимального значения:").pack(pady=5)
+        
+        selected_column = tk.StringVar(automate_window)
+        column_menu = ttk.Combobox(automate_window, textvariable=selected_column, values=numeric_columns)
+        column_menu.pack(pady=5)
+        
+        def on_confirm():
+            column_to_maximize = selected_column.get()
+            if column_to_maximize in numeric_columns:
+                col_index = current_columns.index(column_to_maximize)
+                try:
+                    max_row = max(current_results, key=lambda x: x[col_index])
+                    df = pd.DataFrame([max_row], columns=current_columns)
+                    now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], initialfile=f"Max_{column_to_maximize}_{now}")
+                    if file_path:
+                        df.to_excel(file_path, index=False)
+                        messagebox.showinfo("Успех", f"Строка с максимальным значением в колонке '{column_to_maximize}' сохранена в {file_path}")
+                    automate_window.destroy()
+                except TypeError:
+                    messagebox.showerror("Ошибка", "Выберите другой столбец. Формат этого столбца символьный.")
+            else:
+                messagebox.showerror("Ошибка", f"Колонка '{column_to_maximize}' не найдена в данных.")
+        
+        tk.Button(automate_window, text="Подтвердить", command=on_confirm).pack(pady=10)
+    
+    else:
+        messagebox.showerror("Ошибка", "Нет данных для автоматизации. Выполните запрос.")
+
+def save_row_with_keyword():
+    global current_columns, current_results
+    if current_columns and current_results:
+        keyword_window = tk.Toplevel(root)
+        keyword_window.title("Поиск строки по ключевому слову")
+        
+        tk.Label(keyword_window, text="Введите ключевое слово для поиска строки:").pack(pady=5)
+        
+        keyword_entry = tk.Entry(keyword_window)
+        keyword_entry.pack(pady=5)
+        
+        tk.Label(keyword_window, text="Выберите колонку для поиска ключевого слова:").pack(pady=5)
+        
+        selected_column = tk.StringVar(keyword_window)
+        column_menu = ttk.Combobox(keyword_window, textvariable=selected_column, values=current_columns)
+        column_menu.pack(pady=5)
+        
+        def on_confirm():
+            keyword = keyword_entry.get()
+            column_to_search = selected_column.get()
+            if column_to_search in current_columns:
+                col_index = current_columns.index(column_to_search)
+                try:
+                    matching_row = next((row for row in current_results if keyword in str(row[col_index])), None)
+                    if matching_row:
+                        df = pd.DataFrame([matching_row], columns=current_columns)
+                        now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], initialfile=f"Row_with_{keyword}_{now}")
+                        if file_path:
+                            df.to_excel(file_path, index=False)
+                            messagebox.showinfo("Успех", f"Строка с ключевым словом '{keyword}' сохранена в {file_path}")
+                        keyword_window.destroy()
+                    else:
+                        messagebox.showinfo("Результат", f"Не найдено строк с ключевым словом '{keyword}' в колонке '{column_to_search}'")
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Произошла ошибка: {str(e)}")
+            else:
+                messagebox.showerror("Ошибка", f"Колонка '{column_to_search}' не найдена в данных.")
+        
+        tk.Button(keyword_window, text="Поиск и сохранение", command=on_confirm).pack(pady=10)
+    
+    else:
+        messagebox.showerror("Ошибка", "Нет данных для поиска. Выполните запрос.")
+
+def create_main_window():
+    global root, tree
+
+    root = tk.Tk()
+    root.title("База данных Савва Курин")
+    root.geometry("800x600")
+
+    btn1 = tk.Button(root, text="Средняя стоимость продукции", command=lambda: execute_query("GetAverageProductCost"))
+    btn1.pack(pady=20)
+    btn2 = tk.Button(root, text="Поставки сотрудников", command=lambda: execute_query("GetEmployeeShipments"))
+    btn2.pack(pady=10)
+    btn3 = tk.Button(root, text="Количество сотрудников на заводе", command=lambda: execute_query("GetFactoryEmployeeCount"))
+    btn3.pack(pady=10)
+    btn4 = tk.Button(root, text="Количество заказов по клиентам", command=lambda: execute_query("GetCustomerOrdersCount"))
+    btn4.pack(pady=10)
+    btn5 = tk.Button(root, text="Заказы по клиентам", command=lambda: execute_query("GetCustomerProductShipments"))
+    btn5.pack(pady=20)
+    
+    save_button = tk.Button(root, text="Сохранить в Excel", command=save_results_to_excel)
+    save_button.pack(pady=10)
+    
+    automate_button = tk.Button(root, text="Автоматизация Excel", command=automate_excel)
+    automate_button.pack(pady=10)
+    
+    keyword_button = tk.Button(root, text="Сохранить строку с ключевым словом", command=save_row_with_keyword)
+    keyword_button.pack(pady=10)
+
+    logout_button = tk.Button(root, text="Выход из аккаунта", command=logout)
+    logout_button.pack(pady=20)
+
+    tree = ttk.Treeview(root, show='headings')
+    tree.pack(pady=5, fill=tk.BOTH, expand=True)
+
+    root.mainloop()
+
+def logout():
+    global root
+    root.destroy()
+    open_login_window()
+
+def check_credentials():
+    global username_entry, password_entry, login_window
+
+    username = username_entry.get()
+    password = password_entry.get()
+
+    if len(username) <= 8 or len(password) <= 8:
+        messagebox.showerror("Ошибка", "Логин и пароль должны быть более 8 символов.")
+        return
+
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT username FROM Users WHERE username=? AND password=?", (username, password))
+        row = cursor.fetchone()
+
+        if row:
+            messagebox.showinfo("Успешно", "Вход выполнен успешно.")
+            login_window.destroy()
+            create_main_window()
+        else:
+            messagebox.showerror("Ошибка", "Неправильный логин или пароль.")
+
+        conn.close()
+
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка при подключении к базе данных: {str(e)}")
+
+def open_register_window():
+    global register_window, new_username_entry, new_password_entry
+    register_window = tk.Toplevel(login_window)
+    register_window.title("Регистрация нового пользователя")
+    register_window.geometry("400x228")
+    register_window.resizable(False, False)
+
+    tk.Label(register_window, text="Логин:").pack(pady=5)
+    new_username_entry = tk.Entry(register_window)
+    new_username_entry.pack(pady=5)
+
+    tk.Label(register_window, text="Пароль:").pack(pady=5)
+    new_password_entry = tk.Entry(register_window, show="*")
+    new_password_entry.pack(pady=5)
+
+    tk.Button(register_window, text="Зарегистрироваться", command=register_user).pack(pady=10)
+
+def register_user():
+    global new_username_entry, new_password_entry, register_window
+
+    new_username = new_username_entry.get()
+    new_password = new_password_entry.get()
+
+    if len(new_username) < 8 or len(new_password) < 8:
+        messagebox.showerror("Ошибка", "Логин и пароль должны быть не менее 9 символов.")
+        return
+
+    if new_username == "" or new_password == "":
+        messagebox.showerror("Ошибка", "Необходимо ввести логин и пароль.")
+        return
+
+    try:
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT username FROM Users WHERE username=?", (new_username,))
+        if cursor.fetchone():
+            messagebox.showerror("Ошибка", "Пользователь с таким логином уже существует.")
+            return
+        
+        cursor.execute("INSERT INTO Users (username, password) VALUES (?, ?)", (new_username, new_password))
+        conn.commit()
+        conn.close()
+
+        messagebox.showinfo("Успех", "Регистрация прошла успешно.")
+        register_window.destroy()
+
+    except pyodbc.Error as e:
+        messagebox.showerror("Ошибка", f"Ошибка при подключении к базе данных: {str(e)}")
+
+def open_login_window():
+    global login_window, username_entry, password_entry
+
+    login_window = tk.Tk()
+    login_window.title("Авторизация")
+    login_window.geometry("600x300")
+    login_window.resizable(False, False)
+
+    tk.Label(login_window, text="Логин:").pack(pady=5)
+    username_entry = tk.Entry(login_window)
+    username_entry.pack(pady=5)
+
+    tk.Label(login_window, text="Пароль:").pack(pady=5)
+    password_entry = tk.Entry(login_window, show="*")
+    password_entry.pack(pady=5)
+
+    tk.Button(login_window, text="Войти", command=check_credentials).pack(pady=10)
+    tk.Button(login_window, text="Регистрация", command=open_register_window).pack(pady=10)
+
+    login_window.mainloop()
+
+open_login_window()
